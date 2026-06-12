@@ -38,3 +38,8 @@ scipy
 scikit-learn
 matplotlib
 ```
+
+## Citation
+```
+Qiu, Chenyu, Xu Kuang, Inessa Liskovich, Ali Rauh, and Stefan Wager. 2026. "What is the Long-Term Value of Reliability?" arXiv preprint arXiv:2606.11526. https://arxiv.org/abs/2606.11526.
+```

@@ -1,15 +1,15 @@
 """
-Switchback Validation Plot — Figure 5
+Switchback Validation Plot — Figure 7
 =======================================
 Reads results from run_simulation.py and generates the publication figure:
 two-panel box plot showing (left) 28-day delay impact and (right) long-term
-value impact across 20 eater-resampled fork runs.
+value impact across 20 eater-path reruns.
 
 Usage (from repository root):
     python switchback_validation/plot_figure.py
 
 Input:  switchback_validation/results/sw_validation_results.json
-Output: figures/fig5_switchback_validation.png
+Output: figures/figure7_switchback_validation.png
 """
 from __future__ import annotations
 import json, sys
@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 
 RESULTS_PATH = Path(__file__).parent / "results" / "sw_validation_results.json"
 OUT_DIR      = ROOT / "figures"
-OUT_PATH     = OUT_DIR / "fig5_switchback_validation.png"
+OUT_PATH     = OUT_DIR / "figure7_switchback_validation.png"
 
 C_GT     = "#2196F3"   # blue  = ground truth
 C_SB     = "#F44336"   # red   = switchback delay estimate (left)
@@ -93,7 +93,7 @@ axR.legend(fontsize=14, loc="best")
 axR.grid(axis="y", alpha=0.3)
 for sp in ["top", "right"]: axR.spines[sp].set_visible(False)
 
-fig.suptitle(f"Switchback validation across {len(fr)} eater-resampled runs", fontsize=18)
+fig.suptitle(f"Switchback validation across {len(fr)} eater-path reruns", fontsize=18)
 fig.tight_layout(rect=[0, 0, 1, 0.96])
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)

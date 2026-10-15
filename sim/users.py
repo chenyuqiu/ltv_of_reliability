@@ -70,6 +70,7 @@ def generate_users(
         "spend_total":      np.zeros(n, dtype=np.float64),
         "n_orders":      np.zeros(n, dtype=np.int32),
         "ordered_today": np.zeros(n, dtype=np.bool_),
+        "_quality_history": np.zeros((n, params.quality_effect_days), dtype=np.int8),
         "_orders_buf":   np.zeros((n, 30), dtype=np.int32),
         "_spend_buf":       np.zeros((n, 30), dtype=np.float64),
     }

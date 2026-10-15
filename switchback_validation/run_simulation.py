@@ -1,7 +1,7 @@
 """
-Switchback Validation Simulation — Figure 5
+Switchback Validation Simulation — Figure 7
 =============================================
-Figure 5: Results across 20 eater-resampled replications of a simulated
+Figure 7: Results across 20 eater-resampled replications of a simulated
 marketplace under an increased-supply policy change.
 
 Runs the full simulation:
@@ -13,8 +13,6 @@ Runs the full simulation:
 The market (supply/demand shocks, courier RNG) is held identical across
 all 20 forks. Only the eater-side (user) RNG varies — new-eater arrivals and
 per-eater order draws — isolating pure eater-resampling noise.
-
-Runtime: ~30–60 min wall time (20 forks × 3 simulations each, run in parallel).
 
 Usage (from repository root):
     python switchback_validation/run_simulation.py
@@ -65,7 +63,7 @@ N_BLOCKS      = 24 // BLOCK_HOURS
 BC_SCALE      = (BLOCK_HOURS - 1) / BLOCK_HOURS
 BC_B_OVER_L   = 1 / (BLOCK_HOURS - 1)
 MIN_MATCHED   = 5
-N_BOOTSTRAP   = 25
+N_BOOTSTRAP   = 100
 
 RESULTS_DIR  = Path(__file__).parent / "results"
 RESULTS_PATH = RESULTS_DIR / "sw_validation_results.json"
@@ -220,7 +218,6 @@ def _build_ZTY(obs_df, cum_spend):
         obs_df["S30"].values.astype(float),
         obs_df["R"].values.astype(float),
         np.log1p(obs_df["n_orders"].values.astype(float)),
-        obs_df["n_orders_today"].values.astype(float),
         obs_df["distance"].values.astype(float),
         obs_df["prep_time"].values.astype(float),
         obs_df["tip"].values.astype(float),

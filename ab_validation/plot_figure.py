@@ -1,20 +1,12 @@
 """
 AB Validation Plots
 ===================
-Reads the cache produced by run_simulation.py and renders the paper figures for
-the AB-validation section:
-
-  Figure 1  lifecycle transition probabilities          → fig1_lifecycle_transition.png
-  Figure 2  eater-level outcomes by lifecycle state      → fig2_outcomes_by_state.png
-  Figure 3  marketplace volume & congestion patterns     → fig3_marketplace_patterns.png
-  Figure 4  Chronos estimator vs. AB ground truth        → fig4_chronos_validation.png
-  Figure 6  lifecycle composition over 250 days          → fig6_lifecycle_composition.png
-
+Reads the single main-market AB cache and renders paper Figures 1–6 and 8.
 Usage (from repository root):
     python ab_validation/plot_figure.py
 
 Input:  ab_validation/cache/ab_validation_cache.npz
-Output: figures/fig{1,2,3,4,6}_*.png
+Output: figures/figure{1,2,3,4,5,6,8}_*.png
 """
 from __future__ import annotations
 import sys
@@ -34,10 +26,9 @@ OUT_DIR    = ROOT / "figures"
 # ── Shared style ──────────────────────────────────────────────────────────────
 STATE_NAMES  = ["New", "Casual", "Power", "AtRisk", "Churned"]
 STATE_COLORS = ["#4C9BE8", "#5DBB63", "#F4A623", "#E05C5C", "#AAAAAA"]
-DOW_NAMES    = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 N_STATES     = 5
 
-# Figure 4 (Chronos) style
+# Figure 5 (Chronos) style
 K_COLORS = {28: "#E67E22", 42: "#9B59B6", 56: "#2980B9", 70: "#E91E63"}
 K_SOLID  = 56   # K rendered as thick solid; others dashed
 
@@ -49,7 +40,7 @@ if not CACHE_PATH.exists():
     )
 z = np.load(str(CACHE_PATH))
 
-# Chronos (Figure 4)
+# Chronos (paper Figure 5)
 K_SWEEP        = [int(k) for k in z["K_SWEEP"]]
 betas          = {int(k): float(b) for k, b in zip(z["K_SWEEP"], z["betas"])}
 weekly_del_t   = z["weekly_del_t"]; weekly_mat_t = z["weekly_mat_t"]
@@ -60,7 +51,7 @@ pre_act        = z["pre_act"].astype(np.float64)
 n_act          = int(z["n_act"])
 N_WEEKS        = int(z["N_WEEKS"])
 
-# Obs-phase diagnostics (Figures 1, 2, 3, 6)
+# Obs-phase diagnostics (paper Figures 1, 2, 3, 8)
 trans_ontime    = z["trans_ontime"]
 trans_delay     = z["trans_delay"]
 trans_organic   = z["trans_organic"]
@@ -68,12 +59,12 @@ lc_final        = z["lc_final"].astype(int)
 spend_final     = z["spend_final"].astype(np.float64)
 matched_cum     = z["matched_cum"]
 delayed_cum     = z["delayed_cum"]
+lc_share_daily  = z["lc_share_daily"]
 dow_hr_orders   = z["dow_hr_orders"]
 dow_hr_couriers = z["dow_hr_couriers"]
 dow_hr_matched  = z["dow_hr_matched"]
 dow_hr_match_t  = z["dow_hr_match_t"]
 dow_hr_count    = z["dow_hr_count"]
-lc_share_daily  = z["lc_share_daily"]
 N_OBS_DAYS      = int(z["N_OBS_DAYS"])
 
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -108,7 +99,7 @@ _plot_matrix(axes1[1], _row_norm(trans_ontime.astype(float)),  trans_ontime,  "O
 _plot_matrix(axes1[2], _row_norm(trans_delay.astype(float)),   trans_delay,   "Ordered, Delayed")
 fig1.suptitle("Daily Lifecycle Transition Probabilities", fontsize=19)
 fig1.tight_layout()
-out1 = OUT_DIR / "fig1_lifecycle_transition.png"
+out1 = OUT_DIR / "figure1_lifecycle_transition.png"
 fig1.savefig(str(out1), dpi=150, bbox_inches="tight"); plt.close(fig1)
 print(f"Saved → {out1}")
 
@@ -151,66 +142,163 @@ ax_val.tick_params(axis="both", labelsize=13); ax_val.set_ylim(0, None)
 
 fig2.suptitle("Delay Rate and Lifetime Value by Lifecycle State", fontsize=19)
 fig2.tight_layout()
-out2 = OUT_DIR / "fig2_outcomes_by_state.png"
+out2 = OUT_DIR / "figure2_outcomes_by_state.png"
 fig2.savefig(str(out2), dpi=150, bbox_inches="tight"); plt.close(fig2)
 print(f"Saved → {out2}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Figure 3: Marketplace volume & congestion patterns (TOD / DOW)
+# Figure 3: publication-style marketplace volume and congestion
 # ══════════════════════════════════════════════════════════════════════════════
-hours = np.arange(24); dows = np.arange(7)
-total_ss_days = int(dow_hr_count.sum())
-
-tod_orders   = dow_hr_orders.sum(0)   / max(total_ss_days, 1)
-tod_couriers = dow_hr_couriers.sum(0) / max(total_ss_days, 1)
+day_counts = np.asarray(dow_hr_count, float)
+orders = np.asarray(dow_hr_orders, float)
+couriers = np.asarray(dow_hr_couriers, float)
+matched = np.asarray(dow_hr_matched, float)
+match_minutes = np.asarray(dow_hr_match_t, float)
+assert day_counts.shape == (7,) and (day_counts > 0).all()
+assert all(a.shape == (7, 24) for a in (orders, couriers, matched, match_minutes))
+tod_orders = orders.sum(0) / day_counts.sum()
+tod_couriers = couriers.sum(0) / day_counts.sum()
 with np.errstate(invalid="ignore", divide="ignore"):
-    tod_match_t = np.where(dow_hr_matched.sum(0) > 0,
-                           dow_hr_match_t.sum(0) / dow_hr_matched.sum(0), np.nan)
+    tod_match = np.where(matched.sum(0) > 0,
+                         match_minutes.sum(0) / matched.sum(0), np.nan)
+    dow_match = np.where(matched.sum(1) > 0,
+                         match_minutes.sum(1) / matched.sum(1), np.nan)
+dow_orders = orders.sum(1) / day_counts
+dow_couriers = couriers.sum(1) / day_counts
 
-dow_orders_daily   = dow_hr_orders.sum(1)   / dow_hr_count.clip(1)
-dow_couriers_daily = dow_hr_couriers.sum(1) / dow_hr_count.clip(1)
-with np.errstate(invalid="ignore", divide="ignore"):
-    dow_match_t_avg = np.where(dow_hr_matched.sum(1) > 0,
-                               dow_hr_match_t.sum(1) / dow_hr_matched.sum(1), np.nan)
+original_style = plt.rcParams.copy()
+plt.rcParams.update({
+    "font.family": "DejaVu Sans", "font.size": 17,
+    "axes.labelsize": 18, "xtick.labelsize": 17, "ytick.labelsize": 17,
+    "figure.facecolor": "white", "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+})
+fig3, (ax_tod, ax_dow) = plt.subplots(1, 2, figsize=(18.5, 7.0))
+fig3.subplots_adjust(left=.07, right=.94, bottom=.14, top=.73, wspace=.39)
+COLORS = {"orders": "#4C9BE8", "couriers": "#F4A623", "match": "#5DBB63"}
+hr, dow = np.arange(24), np.arange(7)
 
-fig3, (ax_tod, ax_dow) = plt.subplots(1, 2, figsize=(16, 5))
+tod_r = ax_tod.twinx()
+l1, = ax_tod.plot(hr, tod_orders, color=COLORS["orders"], lw=2.5, marker="o", ms=5.5)
+l2, = ax_tod.plot(hr, tod_couriers, color=COLORS["couriers"], lw=2.5, marker="s", ms=5.5)
+l3, = tod_r.plot(hr, tod_match, color=COLORS["match"], lw=2.5,
+                 ls="--", marker="^", ms=6)
+ax_tod.set(xlabel="Hour of day", ylabel="Avg count per hour")
+tod_r.set_ylabel("Match time (min)")
+tod_r.set_ylim(0, None)
+ax_tod.set_xticks(hr[::2])
+ax_tod.set_title("Time-of-Day Marketplace Pattern", fontsize=20, pad=14)
 
-ax_tod_r = ax_tod.twinx()
-l1, = ax_tod.plot(hours, tod_orders,   color="#4C9BE8", lw=2, marker="o", ms=4, label="Orders/hr")
-l2, = ax_tod.plot(hours, tod_couriers, color="#F4A623", lw=2, marker="s", ms=4, label="Couriers/hr")
-l3, = ax_tod_r.plot(hours, tod_match_t, color="#5DBB63", lw=2, marker="^", ms=4,
-                    linestyle="--", label="Match time (min)")
-ax_tod.set_xlabel("Hour of day", fontsize=15)
-ax_tod.set_ylabel("Avg count per hour", fontsize=15)
-ax_tod_r.set_ylabel("Match time (min)", fontsize=15); ax_tod_r.set_ylim(0, None)
-ax_tod.set_xticks(hours[::2])
-ax_tod.tick_params(axis="both", labelsize=14); ax_tod_r.tick_params(axis="y", labelsize=14)
-ax_tod.set_title("Time-of-Day Marketplace Pattern", fontsize=17)
-ax_tod.legend([l1, l2, l3], [l.get_label() for l in [l1, l2, l3]], fontsize=14, loc="upper left")
+dow_r = ax_dow.twinx()
+ax_dow.plot(dow, dow_orders, color=COLORS["orders"], lw=2.5, marker="o", ms=7.5)
+ax_dow.plot(dow, dow_couriers, color=COLORS["couriers"], lw=2.5, marker="s", ms=7.5)
+dow_r.plot(dow, dow_match, color=COLORS["match"], lw=2.5, ls="--", marker="^", ms=8)
+ax_dow.set(xlabel="Day of week", ylabel="Avg daily count")
+dow_r.set_ylabel("Match time (min)")
+dow_r.set_ylim(0, None)
+ax_dow.set_xticks(dow, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+ax_dow.set_title("Day-of-Week Marketplace Pattern", fontsize=20, pad=14)
 
-ax_dow_r = ax_dow.twinx()
-l4, = ax_dow.plot(dows, dow_orders_daily,   color="#4C9BE8", lw=2, marker="o", ms=6, label="Daily orders")
-l5, = ax_dow.plot(dows, dow_couriers_daily, color="#F4A623", lw=2, marker="s", ms=6, label="Daily couriers")
-l6, = ax_dow_r.plot(dows, dow_match_t_avg, color="#5DBB63", lw=2, marker="^", ms=6,
-                    linestyle="--", label="Avg match time (min)")
-ax_dow.set_xlabel("Day of week", fontsize=15)
-ax_dow.set_ylabel("Avg daily count", fontsize=15)
-ax_dow_r.set_ylabel("Match time (min)", fontsize=15); ax_dow_r.set_ylim(0, None)
-ax_dow.set_xticks(dows); ax_dow.set_xticklabels(DOW_NAMES, fontsize=14)
-ax_dow.tick_params(axis="both", labelsize=14); ax_dow_r.tick_params(axis="y", labelsize=14)
-ax_dow.set_title("Day-of-Week Marketplace Pattern", fontsize=17)
-ax_dow.legend([l4, l5, l6], [l.get_label() for l in [l4, l5, l6]], fontsize=14, loc="upper left")
-
-fig3.suptitle("Marketplace Volume & Congestion Patterns", fontsize=19)
-fig3.tight_layout()
-out3 = OUT_DIR / "fig3_marketplace_patterns.png"
-fig3.savefig(str(out3), dpi=150, bbox_inches="tight"); plt.close(fig3)
+fig3.suptitle("Marketplace Volume & Congestion Patterns", fontsize=22, y=.99)
+fig3.legend([l1, l2, l3], ["Orders", "Couriers", "Match time (min)"],
+            loc="upper center", bbox_to_anchor=(.5, .91), ncol=3,
+            fontsize=17, frameon=False, columnspacing=2.2,
+            handlelength=2.4, markerscale=1.3)
+out3 = OUT_DIR / "figure3_marketplace_patterns.png"
+fig3.savefig(out3, dpi=180, facecolor="white", bbox_inches="tight", pad_inches=.06)
+plt.close(fig3)
+plt.rcParams.update(original_style)
 print(f"Saved → {out3}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Figure 4: Chronos estimator vs. AB ground truth
+# Figure 4: observed balance and overlap in the main simulation market (K=56)
+# ══════════════════════════════════════════════════════════════════════════════
+features = list(map(str, z["diag_feature_names"]))
+assert len(features) == 13 and "orders already placed today" not in features
+lookup = {name: j for j, name in enumerate(features)}
+raw = np.asarray(z["K56_diag_observed_smd_raw"], float)
+weighted = np.asarray(z["K56_diag_observed_smd_weighted"], float)
+
+def _most_imbalanced_time_component(prefix, label):
+    """Display one cyclic component; both remain in CBPS and overlap checks."""
+    names = (f"{prefix} sine", f"{prefix} cosine")
+    chosen = max(names, key=lambda name: abs(raw[lookup[name]]))
+    return chosen, f"{label} ({chosen.rsplit(' ', 1)[-1]})"
+
+selected = [
+    ("past delay rate (30d)", "Past delay rate (30d)"),
+    ("spend (30d)", "Past spending (30d)"),
+    ("distance", "Distance"),
+    ("quoted prep time", "Restaurant prep time"),
+    ("tip", "Tip"),
+    _most_imbalanced_time_component("day-of-week", "Day of week"),
+    _most_imbalanced_time_component("hour", "Hour of day"),
+]
+# Rank by pre-weighting imbalance
+selected.sort(key=lambda item: abs(raw[lookup[item[0]]]), reverse=True)
+before = np.array([abs(raw[lookup[name]]) for name, _ in selected])
+after = np.array([abs(weighted[lookup[name]]) for name, _ in selected])
+labels = [label for _, label in selected]
+n_arm = np.asarray(z["K56_diag_n_by_arm"], int)
+bins = np.asarray(z["diag_overlap_bins"], float)
+hist = np.asarray(z["diag_overlap_hist"], float)
+assert hist.shape == (2, len(bins)-1)
+assert np.array_equal(hist.sum(axis=1), n_arm)
+
+plt.rcParams.update({
+    "font.family": "DejaVu Sans", "font.size": 16,
+    "axes.titlesize": 19, "axes.labelsize": 16,
+    "xtick.labelsize": 16, "ytick.labelsize": 16,
+    "figure.facecolor": "white", "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+})
+fig4, (left, right) = plt.subplots(1, 2, figsize=(17.2, 6.4))
+fig4.subplots_adjust(left=.20, right=.975, top=.88, bottom=.27, wspace=.35)
+yy = np.arange(len(labels))
+left.barh(yy-.19, before, height=.30, color="#aebcc6", label="Before weighting")
+left.barh(yy+.19, after, height=.30, color="#008c95", label="After CBPS")
+margin = max(.006, .015 * before.max())
+for j, (x, y) in enumerate(zip(before, after)):
+    left.text(x+margin, j-.19, f"{x:.3f}", fontsize=14, va="center")
+    left.text(y+margin, j+.19, f"{y:.4f}", fontsize=14, va="center",
+              color="#008c95")
+left.set_yticks(yy, labels)
+left.invert_yaxis()
+left.set_xlim(0, max(.12, float(max(before.max(), after.max()))*1.28))
+left.set_xlabel("Absolute standardized mean difference")
+left.set_title("Abs SMD Before and After CBPS", pad=13)
+handles, legend_labels = left.get_legend_handles_labels()
+fig4.legend(handles, legend_labels, frameon=False, fontsize=15,
+            loc="lower center", bbox_to_anchor=(.37, .015), ncol=2)
+left.grid(axis="x", color="#dce4e7", lw=.8)
+left.set_axisbelow(True)
+left.spines[["top", "right"]].set_visible(False)
+
+for arm, (color, label) in enumerate((("#335c81", "On time"), ("#bf5e35", "Delayed"))):
+    density = hist[arm] / n_arm[arm] / np.diff(bins)
+    right.stairs(density, bins, fill=True, color=color, alpha=.085)
+    right.stairs(density, bins, color=color, lw=2.3, label=label)
+right.set_xlim(0, 1)
+right.set_ylim(bottom=0)
+right.set_xticks(np.arange(0, 1.01, .2))
+right.set_xlabel("Predicted delay probability")
+right.set_ylabel("Within-arm density")
+right.set_title("Overlap Checks", pad=13)
+right.legend(frameon=False, fontsize=15)
+right.grid(axis="y", color="#dce4e7", lw=.8)
+right.set_axisbelow(True)
+right.spines[["top", "right"]].set_visible(False)
+out4 = OUT_DIR / "figure4_balance_overlap.png"
+fig4.savefig(out4, dpi=200, facecolor="white", bbox_inches="tight", pad_inches=.06)
+plt.close(fig4)
+plt.rcParams.update(original_style)
+print(f"Saved → {out4}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 5: Chronos estimator vs. AB ground truth
 # ══════════════════════════════════════════════════════════════════════════════
 def _delta_dr(slc):
     nt = int(weekly_mat_t[slc].sum()); nc = int(weekly_mat_c[slc].sum())
@@ -221,7 +309,7 @@ def _delta_dr(slc):
 delta_dr = _delta_dr(slice(N_WEEKS - 4, N_WEEKS))
 print(f"Δdr (last 4 AB weeks) = {delta_dr:+.3f}pp")
 
-# Per-week ANCOVA (OLS with pre-AB spending covariate)
+# Per-week adjustments (OLS with pre-AB spending covariate)
 n_a     = len(D_act)
 X       = np.column_stack([np.ones(n_a), D_act, pre_act])
 XtX_inv = np.linalg.inv(X.T @ X)
@@ -246,7 +334,7 @@ for K, p in preds.items():
 weeks     = np.arange(N_WEEKS)
 week_lbls = [f"W{w+1}" for w in range(N_WEEKS)]
 
-fig4, ax = plt.subplots(figsize=(11, 5.5))
+fig5, ax = plt.subplots(figsize=(11, 5.5))
 ax.plot(weeks, anc_dgb_wk, color="#5DBB63", lw=2.4, marker="o", ms=5, label="Weekly ΔLTV%")
 ax.fill_between(weeks, anc_dgb_wk - 1.96*anc_se_wk, anc_dgb_wk + 1.96*anc_se_wk,
                 color="#5DBB63", alpha=0.20, label="Weekly ΔLTV 95% CI")
@@ -262,36 +350,80 @@ ax.set_xlabel("Week since AB start", fontsize=14)
 ax.set_ylabel("ΔLTV%", fontsize=14)
 ax.tick_params(axis="y", labelsize=13)
 ax.legend(fontsize=12, loc="lower right")
-fig4.tight_layout()
-out4 = OUT_DIR / "fig4_chronos_validation.png"
-fig4.savefig(str(out4), dpi=150, bbox_inches="tight"); plt.close(fig4)
-print(f"Saved → {out4}")
+fig5.tight_layout()
+out5 = OUT_DIR / "figure5_chronos_validation.png"
+fig5.savefig(str(out5), dpi=150, bbox_inches="tight"); plt.close(fig5)
+print(f"Saved → {out5}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Figure 6: Lifecycle composition across simulation days (stacked area)
+# Figure 6: Chronos response by K on a fixed cohort
+# ══════════════════════════════════════════════════════════════════════════════
+K_h = np.asarray(z["horizon_K"], int)
+assert K_h.tolist() == [28, 42, 56, 70, 84, 100]
+assert int(z["horizon_common_obs_max"]) == 49
+beta_h = np.asarray(z["horizon_beta_pt"], float)
+boot_h = np.asarray(z["horizon_boot_cbps"], float)
+assert beta_h.shape == (len(K_h),)
+assert boot_h.shape == (100, len(K_h)) and np.isfinite(boot_h).all()
+assert np.isclose(float(z["delta_dr_AB"]), delta_dr)
+pred_h = boot_h * delta_dr * 100.
+mean_h = pred_h.mean(0)
+lo_h, hi_h = np.percentile(pred_h, [2.5, 97.5], axis=0)
+
+plt.rcParams.update({
+    "font.family": "DejaVu Sans", "font.size": 13, "axes.labelsize": 13,
+    "xtick.labelsize": 13, "ytick.labelsize": 13,
+    "figure.facecolor": "white", "axes.facecolor": "white",
+    "savefig.facecolor": "white",
+})
+fig6, ax6 = plt.subplots(figsize=(7.4, 4.9))
+fig6.subplots_adjust(left=.12, right=.98, top=.97, bottom=.14)
+teal = "#008c95"
+ci = ax6.errorbar(K_h, mean_h, yerr=[mean_h-lo_h, hi_h-mean_h],
+                   fmt="none", ecolor=teal, elinewidth=1.9,
+                   capsize=5.5, capthick=1.9, zorder=2)
+curve, = ax6.plot(K_h, mean_h, "-o", color=teal, lw=2.5,
+                  markersize=6.5, zorder=3)
+ax6.legend([curve, ci], ["Chronos estimate", "95% bootstrap CI"],
+           frameon=False, fontsize=12, loc="lower right")
+ax6.set_xticks(K_h)
+ax6.set_xlim(22, 106)
+ax6.set_ylim(0, float(hi_h.max()) * 1.12)
+ax6.set_xlabel("Outcome horizon K (days)")
+ax6.set_ylabel(r"$\Delta\,\mathrm{LTV}\%$")
+ax6.spines[["top", "right"]].set_visible(False)
+out6 = OUT_DIR / "figure6_horizon_k28_100.png"
+fig6.savefig(out6, dpi=200, facecolor="white", bbox_inches="tight", pad_inches=.06)
+plt.close(fig6)
+plt.rcParams.update(original_style)
+print(f"Saved → {out6}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure 8: Lifecycle composition across simulation days (stacked area)
 # ══════════════════════════════════════════════════════════════════════════════
 n_days_total = lc_share_daily.shape[0]
 days = np.arange(n_days_total)
 
-fig6, ax6 = plt.subplots(figsize=(12, 5))
-ax6.stackplot(days, lc_share_daily.T, labels=STATE_NAMES, colors=STATE_COLORS, alpha=0.9)
+fig8, ax8 = plt.subplots(figsize=(12, 5))
+ax8.stackplot(days, lc_share_daily.T, labels=STATE_NAMES, colors=STATE_COLORS, alpha=0.9)
 
 final = lc_share_daily[-1]; cum = np.cumsum(final)
 for s, name in enumerate(STATE_NAMES):
     if final[s] > 0.02:
-        ax6.text(n_days_total + 1.0, cum[s] - final[s] / 2, name, va="center", ha="left",
+        ax8.text(n_days_total + 1.0, cum[s] - final[s] / 2, name, va="center", ha="left",
                  fontsize=13, color=STATE_COLORS[s], fontweight="bold")
 
-ax6.set_xlabel("Simulation day", fontsize=15)
-ax6.set_ylabel("Population share", fontsize=15)
-ax6.set_xlim(0, n_days_total + 12); ax6.set_ylim(0, 1)
-ax6.tick_params(axis="both", labelsize=14)
-ax6.legend(loc="upper left", fontsize=13, ncol=N_STATES, frameon=True)
-fig6.suptitle(f"Lifecycle Composition Across {n_days_total} Simulation Days", fontsize=19)
-fig6.tight_layout()
-out6 = OUT_DIR / "fig6_lifecycle_composition.png"
-fig6.savefig(str(out6), dpi=150, bbox_inches="tight"); plt.close(fig6)
-print(f"Saved → {out6}")
+ax8.set_xlabel("Simulation day", fontsize=15)
+ax8.set_ylabel("Population share", fontsize=15)
+ax8.set_xlim(0, n_days_total + 12); ax8.set_ylim(0, 1)
+ax8.tick_params(axis="both", labelsize=14)
+ax8.legend(loc="upper left", fontsize=13, ncol=N_STATES, frameon=True)
+fig8.suptitle(f"Lifecycle Composition Across {n_days_total} Simulation Days", fontsize=19)
+fig8.tight_layout()
+out8 = OUT_DIR / "figure8_lifecycle_composition.png"
+fig8.savefig(str(out8), dpi=150, bbox_inches="tight"); plt.close(fig8)
+print(f"Saved → {out8}")
 
 print("\nDone.")

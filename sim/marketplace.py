@@ -121,6 +121,7 @@ def run_marketplace(
     o_tip     = orders["tip"][sidx]
     o_eta     = orders["ETA"][sidx]
     o_user    = orders["user_idx"][sidx]
+    o_bad_quality = orders["hidden_bad_quality"][sidx]
 
     base_actual   = params.tau_base + params.tau_dist * o_dist * speed_k
     order_contrib = -params.gamma_dist * o_dist + params.gamma_tip * o_tip
@@ -198,7 +199,10 @@ def run_marketplace(
     # ── Delay assignment ──────────────────────────────────────────────────────
     matched     = ~np.isnan(match_time)
     _match_safe = np.where(matched, match_time, 0.0)
-    actual_dur  = base_actual + np.maximum(o_prep_orig * kitchen_k, o_prep + _match_safe)
+    actual_kitchen = o_prep_orig * kitchen_k * np.exp(
+        params.quality_delay_log_effect * o_bad_quality
+    )
+    actual_dur  = base_actual + np.maximum(actual_kitchen, o_prep + _match_safe)
     delayed_ord = matched & (actual_dur > o_eta + params.delay_buffer_min)
 
     # ── Aggregate to per-user arrays ──────────────────────────────────────────

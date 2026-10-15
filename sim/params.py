@@ -121,7 +121,14 @@ class DGPParams:
 
     # ── users.py: Delay memory ────────────────────────────────────────────────
     # D(t) update: log D(t+1) = exp(-λ_mem)·log D(t) − β_d·1[delayed]
-    lambda_mem: float = 0.08   # decay rate; half-life ≈ ln2/0.08 ≈ 8.7 days
+    lambda_mem: float = 0.06   # paper setting; half-life ≈ ln2/0.06 ≈ 11.6 days
+
+    # Optional unobserved service-quality shock; defaults preserve the
+    # original data-generating process and random-number stream.
+    quality_bad_prob: float = 0.0
+    quality_delay_log_effect: float = 0.0
+    quality_demand_log_effect: float = 0.0
+    quality_effect_days: int = 7
 
     # ── users.py: New-user arrivals ───────────────────────────────────────────
     # n_new ~ Poisson(lambda_growth · n_active) each day. Proportional arrivals

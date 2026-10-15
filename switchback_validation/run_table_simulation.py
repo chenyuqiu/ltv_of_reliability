@@ -65,7 +65,7 @@ N_BLOCKS      = 24 // BLOCK_HOURS
 BC_SCALE      = (BLOCK_HOURS - 1) / BLOCK_HOURS
 BC_B_OVER_L   = 1 / (BLOCK_HOURS - 1)
 MIN_MATCHED   = 5
-N_WORKERS     = min(N_RUNS, multiprocessing.cpu_count())
+N_WORKERS     = min(N_RUNS, int(os.environ.get("TABLE_WORKERS", "8")))
 
 RESULTS_DIR  = Path(__file__).parent / "results"
 RESULTS_PATH = RESULTS_DIR / "table2_results.json"

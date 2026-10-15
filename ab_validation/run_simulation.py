@@ -8,7 +8,7 @@ saves a cache file that plot_figure.py script reads.
 During the warmup + observational phases the same run also accumulates the
 obs-phase diagnostics (lifecycle transitions, per-state delay/value, time-of-day
 & day-of-week marketplace patterns, lifecycle composition over time) used for
-Figures 1, 2, 3 and 6. 
+Figures 1, 2, 3 and 8.
 
 Phases
 ------
@@ -18,11 +18,13 @@ Phases
 
 After the AB phase the script fits the three estimators (Naive, IPW-MLP,
 IPW-CBPS) on the observational data for each forward horizon K, computes the
-ANCOVA ground-truth ΔLTV% and generate main result table (Table 1).
+regression-adjusted ground-truth ΔLTV% and generate main result table (Table 1),
+plus the inputs for Figure 4 (K=56 balance/overlap), Figure 5 (Chronos vs. AB)
+and Figure 6 (extended K-horizon response).
 
 Runtime:
   RUN_BOOTSTRAP=False : ~25 min (sim + full-sample point estimates) — figures + Table-1 point estimates
-  RUN_BOOTSTRAP=True  : ~9 h    (adds the B=200 user-level bootstrap CIs for K in K_TABLE)
+  RUN_BOOTSTRAP=True  : several hours (adds 100 user-level bootstrap CIs for K in K_TABLE)
 
 Output:
     ab_validation/cache/ab_validation_cache.npz
@@ -53,6 +55,9 @@ from sim.users import (generate_users, generate_users_warm,
                        CHURNED, N_STATES)
 from sim.demand import draw_daily_orders
 from sim.marketplace import run_marketplace
+from ab_validation.diagnostics import (
+    FEATURE_NAMES, standardized_differences, weight_summary, cross_fitted_overlap,
+)
 
 # ── Simulation parameters ─────────────────────────────────────────────────────
 SEED               = 123
@@ -67,16 +72,19 @@ N_OBS_DAYS         = 150
 N_AB_DAYS          = 120
 K_ENTRY            = 28      # active-cohort window: first AB order within K_ENTRY days
 LAST_K_DAYS        = 28      # last-4-week aggregate for β_AB ground truth
-N_PRE_AB           = 28      # pre-AB spending lookback for ANCOVA covariate
+N_PRE_AB           = 28      # pre-AB spending lookback for pre-treatment covariate
 DELTA_PI           = 0.01    # policy-gradient normalizer (1 pp delay change)
 MAX_N              = 1_000_000
 E_MATCH_ALPHA      = 0.05    # EWMA weight for avg_match_time (half-life ≈ 14 days)
 N_WEEKS            = N_AB_DAYS // 7
-K_SWEEP            = [28, 42, 56, 70]   # forward horizons for the Figure-4 Chronos lines (CBPS)
+K_SWEEP            = [28, 42, 56, 70]   # Figure 5
 K_TABLE            = [56, 70]           # horizons reported in Table 1 (all three estimators)
+HORIZON_K          = [28, 42, 56, 70, 84, 100]  # Figure 6
+HORIZON_MAX_K      = max(HORIZON_K)
+HORIZON_WORKERS    = 8                  # CBPS-only bootstrap; no MLP re-fits
 B_BOOT             = 100                # user-level bootstrap reps for the Table-1 CIs
-N_WORKERS          = 32                 # processes for the bootstrap
-RUN_BOOTSTRAP      = False              # True → full Table 1 with CIs (~9h); False → point estimates only
+N_WORKERS          = 16                 # worker count only; does not change bootstrap seeds
+RUN_BOOTSTRAP      = True               # 100 eater-cluster refits for Table 1
 STEADY_START       = 50      # obs day at which steady-state diagnostic accumulators begin
 SLOTS_PER_HR       = 12      # marketplace 5-min slots per hour (288 slots/day)
 
@@ -156,6 +164,27 @@ def _boot_one(seed_b):
     idx   = np.concatenate([_BT["u2r"][int(u)] for u in bu])
     return _estimate(_BT["Z"][idx], _BT["T"][idx], _BT["Y"][idx], _BT["spend"][idx], seed_b)
 
+# Figure 6: the same resampled eater clusters and CBPS fit serve all K.
+# The treatment/covariates are held fixed; only forward spending changes.
+_HBT: dict = {}
+
+def _boot_horizon(seed_b):
+    rng_b = np.random.default_rng(seed_b)
+    users = _HBT["users"]
+    bu = rng_b.choice(users, size=len(users), replace=True)
+    idx = np.concatenate([_HBT["u2r"][int(u)] for u in bu])
+    T = _HBT["T"][idx]
+    Z = _standardize(_HBT["Z"][idx].copy())
+    dpi = np.full(len(T), DELTA_PI)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        w0 = _cbps_weights(Z, (T == 0).astype(float), dpi)
+        w1 = _cbps_weights(Z, (T == 1).astype(float), dpi)
+    y = _HBT["Y"][idx]
+    signed_weight = np.where(T == 1, w1, -w0)
+    return ((signed_weight[:, None] * y).sum(axis=0) * DELTA_PI
+            / _HBT["spend"][idx].sum())
+
 def _append(base, new):
     """Concatenate two latent/state dicts along axis 0."""
     return {k: np.concatenate([base[k], new[k]], 0) for k in base}
@@ -204,7 +233,7 @@ _sum7    = np.zeros(MAX_N, dtype=np.int32);       _ord_sum7 = np.zeros(MAX_N, dt
 e_match  = 10.0   # initial estimate; converges to true market avg during warmup
 spend_mat = np.zeros((MAX_N, N_OBS_DAYS), dtype=np.float32)
 
-# ── Obs-phase diagnostic accumulators (Figures 1, 2, 3, 6) ────────────────────
+# ── Obs-phase diagnostic accumulators (Figures 1, 2, 3, 8) ────────────────────
 # Collected during the warmup + observational phases of this same run (no extra
 # simulation). Plotted by plot_figure.py; they do not feed the CBPS/Chronos path.
 trans_ontime   = np.zeros((N_STATES, N_STATES), dtype=np.int64)   # ordered, on-time
@@ -373,7 +402,7 @@ for ad in range(N_AB_DAYS):
         weekly_del_c[w_ad] += int(del_day[~treat_flag].sum())
         weekly_mat_c[w_ad] += int(mat_day[~treat_flag].sum())
 
-    # Accumulate weekly spending (per-user totals, for ANCOVA)
+    # Accumulate weekly spending (per-user totals, for regression adjustment)
     _wk_spend += rspend[:n0].astype(np.float64)
     if (ad % 7 == 6) or (ad == N_AB_DAYS - 1):
         w = ad // 7
@@ -431,7 +460,6 @@ Z_all     = np.column_stack([
     obs["S30"].values.astype(float),
     obs["R"].values.astype(float),
     np.log1p(obs["n_orders"].values.astype(float)),
-    obs["n_orders_today"].values.astype(float),
     obs["distance"].values.astype(float),
     obs["prep_time"].values.astype(float),
     obs["tip"].values.astype(float),
@@ -442,6 +470,7 @@ Z_all     = np.column_stack([
 beta_pt    = {}        # K -> full-sample CBPS β  (feeds the Figure-4 Chronos lines)
 table_pt   = {}        # K -> (naive, mlp-ipw, cbps) full-sample point estimates (Table 1)
 table_boot = {}        # K -> (B_BOOT, 3) bootstrap reps (Table-1 CIs); empty if RUN_BOOTSTRAP=False
+diag_kw    = {}        # main-market, no-U Figure 4 balance/overlap/weight summaries
 print(f"\nFull-sample estimation  (K_SWEEP={K_SWEEP}, Table-1 K={K_TABLE}, "
       f"bootstrap={'ON' if RUN_BOOTSTRAP else 'OFF'}):")
 for K in K_SWEEP:
@@ -464,6 +493,34 @@ for K in K_SWEEP:
         beta_pt[K] = b_cbps
         print(f"  K={K:2d}d  rows={len(Z_k):,}  cbps={b_cbps*100:+.4f}  (%/pp)  [{time.time()-t_est:.0f}s]")
 
+    if K in K_TABLE:
+        # Diagnostics use precisely the observed K-specific Table-1 cohort.
+        # Refit only diagnostic weights so the original Table-1 estimator
+        # implementation and its bootstrap remain untouched.
+        Z_std = _standardize(Z_k.copy())
+        dpi = np.full(len(T_k), DELTA_PI)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            w0 = _cbps_weights(Z_std, (T_k == 0).astype(float), dpi)
+            w1 = _cbps_weights(Z_std, (T_k == 1).astype(float), dpi)
+        if not np.isclose(_policy_gradient(T_k, Y_k, spend_k, w0, w1),
+                          b_cbps, rtol=1.e-8, atol=1.e-10):
+            raise AssertionError("Figure 4 diagnostic weights differ from Table 1 CBPS")
+        delayed = T_k == 1
+        actual_w = np.where(delayed, w1, w0)
+        prefix = f"K{K}_diag_"
+        diag_kw[prefix + "n_by_arm"] = np.array(
+            [(~delayed).sum(), delayed.sum()], dtype=np.int64)
+        diag_kw[prefix + "observed_smd_raw"] = standardized_differences(Z_k[:, 1:], delayed)
+        diag_kw[prefix + "observed_smd_weighted"] = standardized_differences(
+            Z_k[:, 1:], delayed, actual_w[delayed], actual_w[~delayed])
+        diag_kw[prefix + "weight_delayed"] = weight_summary(actual_w[delayed], Y_k[delayed])
+        diag_kw[prefix + "weight_ontime"] = weight_summary(actual_w[~delayed], Y_k[~delayed])
+        if K == 56:
+            overlap = cross_fitted_overlap(Z_std[:, 1:], T_k, uid_k)
+            for key, value in overlap.items():
+                diag_kw["diag_overlap_" + key] = value
+
     # Bootstrap CIs for the Table-1 horizons (the ~9h cost; off by default)
     if RUN_BOOTSTRAP and K in K_TABLE:
         users_k = np.unique(uid_k)
@@ -479,15 +536,61 @@ for K in K_SWEEP:
             table_boot[K] = np.array(list(pool.imap_unordered(_boot_one, seeds_b)))
         print(f"        bootstrap B={B_BOOT} ({N_WORKERS}w): {(time.time()-t_bt)/60:.1f} min")
 
+# Figure 6: one common index-order cohort, observational days 0–49, with
+# sufficient subsequent outcomes for K=100. This changes neither the AB run
+# nor Table 1 / Figure 5's K-specific eligibility masks above.
+_BT.clear()
+common_max_day = N_OBS_DAYS - HORIZON_MAX_K - 1
+common = td_all <= common_max_day
+uid_h, td_h = uid_all[common], td_all[common]
+T_h, spend_h, Z_h = T_all[common], spend_all[common], Z_all[common]
+Y_h = np.column_stack([
+    (cum_spend[uid_h, td_h + 1 + K] - cum_spend[uid_h, td_h + 1])
+    .astype(np.float64)
+    for K in HORIZON_K
+])
+Z_h_std = _standardize(Z_h.copy())
+dpi_h = np.full(len(T_h), DELTA_PI)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    w0_h = _cbps_weights(Z_h_std, (T_h == 0).astype(float), dpi_h)
+    w1_h = _cbps_weights(Z_h_std, (T_h == 1).astype(float), dpi_h)
+horizon_pt = np.array([
+    _policy_gradient(T_h, Y_h[:, j], spend_h, w0_h, w1_h)
+    for j in range(len(HORIZON_K))
+], dtype=np.float64)
+print(f"\nFigure 6 common cohort: index days 0–{common_max_day}, "
+      f"{len(uid_h):,} orders, K={HORIZON_K}")
+horizon_boot = np.empty((0, len(HORIZON_K)), dtype=np.float64)
+if RUN_BOOTSTRAP:
+    users_h = np.unique(uid_h)
+    u2r_h = {int(u): [] for u in users_h}
+    for i, u in enumerate(uid_h):
+        u2r_h[int(u)].append(i)
+    for u in u2r_h:
+        u2r_h[u] = np.array(u2r_h[u], dtype=np.int64)
+    _HBT.update(users=users_h, u2r=u2r_h, T=T_h, spend=spend_h,
+                Z=Z_h, Y=Y_h)
+    seeds_h = [SEED + 77777 + b for b in range(B_BOOT)]
+    t_h = time.time()
+    with mp.Pool(HORIZON_WORKERS) as pool:
+        horizon_boot = np.array(
+            list(pool.imap(_boot_horizon, seeds_h)), dtype=np.float64)
+    if horizon_boot.shape != (B_BOOT, len(HORIZON_K)) or not np.isfinite(horizon_boot).all():
+        raise ValueError("Incomplete Figure 6 common-cohort bootstrap")
+    print(f"  shared-CBPS horizon bootstrap B={B_BOOT} ({HORIZON_WORKERS}w): "
+          f"{(time.time()-t_h)/60:.1f} min")
+_HBT.clear()
+
 del cum_spend
 
 # ── Prepare active-cohort arrays for cache ────────────────────────────────────
-# ANCOVA (OLS with pre-AB spending covariate) is run in plot_figure.py on these arrays.
+# OLS with pre-AB spending covariate is run in plot_figure.py on these arrays.
 D_act        = latent["treatment"][:n0][active_mask].astype(float)
 pre_act      = pre_ab_spend[active_mask]
 wk_spend_act = wk_spend_all[:, active_mask]
 
-# ── Ground-truth ΔLTV%: ANCOVA over the last LAST_K_DAYS (W14-W17), active cohort ─
+# ── Ground-truth ΔLTV%: regression adjustment over the last LAST_K_DAYS (W14-W17), active cohort ─
 _X        = np.column_stack([np.ones(len(D_act)), D_act, pre_act])
 _XtXinv   = np.linalg.inv(_X.T @ _X)
 _y_lt     = wk_spend_act[N_WEEKS - LAST_K_DAYS // 7:].sum(axis=0).astype(np.float64)
@@ -502,7 +605,7 @@ truth_hi  = truth_dgb + 1.96 * truth_se
 
 # ── Table 1: main result table ───────────────────────────────────────────────────
 print("\n" + "=" * 70)
-print(f"TABLE 1   truth (ANCOVA W14-W17) ΔLTV% = {truth_dgb:+.3f}%  "
+print(f"TABLE 1   truth (W14-W17) ΔLTV% = {truth_dgb:+.3f}%  "
       f"95% CI [{truth_lo:+.3f}, {truth_hi:+.3f}]")
 print(f"          Δdr_AB (full n) = {delta_dr_AB:+.4f} pp"
       f"   (ΔLTV% = β × Δdr_last4w)")
@@ -559,6 +662,12 @@ save_kw = dict(
     B_BOOT           = np.int32(B_BOOT),
     RUN_BOOTSTRAP    = np.bool_(RUN_BOOTSTRAP),
     SEED             = np.int32(SEED),
+    diag_feature_names = FEATURE_NAMES,
+    horizon_K          = np.array(HORIZON_K, dtype=np.int32),
+    horizon_beta_pt    = horizon_pt,
+    horizon_boot_cbps  = horizon_boot,
+    horizon_common_obs_max = np.int32(common_max_day),
+    horizon_n_orders = np.int64(len(uid_h)),
     # ── Obs-phase diagnostics (Figures 1, 2, 3, 6) ──
     trans_ontime  = trans_ontime, trans_delay = trans_delay, trans_organic = trans_organic,
     lc_final      = lc_final,     spend_final  = spend_final,
@@ -572,6 +681,7 @@ save_kw = dict(
     STEADY_START = np.int32(STEADY_START),
     SLOTS_PER_HR = np.int32(SLOTS_PER_HR),
 )
+save_kw.update(diag_kw)
 # ── Table-1 point estimates (and bootstrap reps, when RUN_BOOTSTRAP) ──
 for K in K_TABLE:
     if K in table_pt:

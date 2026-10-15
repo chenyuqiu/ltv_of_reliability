@@ -77,7 +77,9 @@ def draw_daily_orders(
         kappa_t = rng.lognormal(0.0, params.sigma_demand)
 
     multipliers    = params.state_multipliers[state["lifecycle"]]
-    lam            = latent["beta_y"] * state["D"] * multipliers * kappa_t
+    quality_load   = state["_quality_history"].sum(axis=1)
+    lam            = (latent["beta_y"] * state["D"] * multipliers * kappa_t
+                      * np.exp(-params.quality_demand_log_effect * quality_load))
     n_orders_today = rng.poisson(lam).astype(np.int32)
 
     # ── Stage 2: Per-order characteristics ───────────────────────────────────
@@ -89,6 +91,7 @@ def draw_daily_orders(
             "distance": empty.copy(), "prep_time": empty.copy(),
             "prep_time_orig": empty.copy(), "spend": empty.copy(),
             "tip": empty.copy(), "ETA": empty.copy(),
+            "hidden_bad_quality": np.empty(0, dtype=np.int8),
         }
 
     user_idx   = np.repeat(np.arange(n, dtype=np.int32), n_orders_today)
@@ -128,6 +131,7 @@ def draw_daily_orders(
         "spend":          spends,
         "tip":            tips,
         "ETA":            ETAs,
+        "hidden_bad_quality": np.zeros(total_orders, dtype=np.int8),
     }
     return n_orders_today, spend_today, orders
 

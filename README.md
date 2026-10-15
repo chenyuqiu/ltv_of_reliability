@@ -9,7 +9,7 @@ ltv_of_reliability/
 │   ├── users.py                      # User generative model + lifecycle Markov chain
 │   ├── demand.py                     # Daily order count + per-order characteristics
 │   ├── marketplace.py                # 5-min slot FIFO courier matching + delay logic
-│   └── confounder.py                 # Optional unobserved quality-shock sensitivity
+│   └── confounder.py                 # Unobserved service shock for sensitivity check
 ├── ab_validation/
 │   ├── run_simulation.py             # Main AB simulation and Table 1
 │   ├── diagnostics.py                # Balance, overlap, and weight diagnostics

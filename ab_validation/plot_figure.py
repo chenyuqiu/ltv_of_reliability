@@ -18,6 +18,9 @@ sys.path.insert(0, str(ROOT))
 import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from scipy.interpolate import PchipInterpolator
+from scipy.integrate import trapezoid
+from scipy.ndimage import gaussian_filter1d
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CACHE_PATH = Path(__file__).parent / "cache" / "ab_validation_cache.npz"
@@ -77,28 +80,29 @@ print(f"Loaded cache: K_SWEEP={K_SWEEP}  n_act={n_act:,}  N_WEEKS={N_WEEKS}")
 def _row_norm(mat):
     return mat / mat.sum(axis=1, keepdims=True).clip(1)
 
-def _plot_matrix(ax, prob_mat, count_mat, title):
+def _plot_matrix(ax, prob_mat, title):
     im = ax.imshow(prob_mat, vmin=0, vmax=1, cmap="Blues", aspect="auto")
     for i in range(N_STATES):
         for j in range(N_STATES):
-            v = prob_mat[i, j]; c = int(count_mat[i, j])
-            ax.text(j, i, f"{v:.2f}\n(n={c:,})", ha="center", va="center",
-                    fontsize=11, color="white" if v > 0.55 else "black")
-    ax.set_xticks(range(N_STATES)); ax.set_xticklabels(STATE_NAMES, fontsize=13)
-    ax.set_yticks(range(N_STATES)); ax.set_yticklabels(STATE_NAMES, fontsize=13)
-    ax.set_xlabel("State at end of day (t+1)", fontsize=15)
-    ax.set_ylabel("State at start of day (t)", fontsize=15)
-    ax.set_title(title, fontsize=17)
-    cb = plt.colorbar(im, ax=ax, shrink=0.75)
-    cb.set_label("Transition probability", fontsize=14)
-    cb.ax.tick_params(labelsize=12)
+            v = prob_mat[i, j]
+            ax.text(j, i, f"{v:.2f}", ha="center", va="center",
+                    fontsize=15, color="white" if v > 0.55 else "black")
+    ax.set_xticks(range(N_STATES))
+    ax.set_xticklabels(STATE_NAMES, fontsize=16)
+    ax.set_yticks(range(N_STATES)); ax.set_yticklabels(STATE_NAMES, fontsize=16)
+    ax.set_title(title, fontsize=19)
+    return im
 
-fig1, axes1 = plt.subplots(1, 3, figsize=(22, 6))
-_plot_matrix(axes1[0], _row_norm(trans_organic.astype(float)), trans_organic, "Did Not Order")
-_plot_matrix(axes1[1], _row_norm(trans_ontime.astype(float)),  trans_ontime,  "Ordered, On-Time")
-_plot_matrix(axes1[2], _row_norm(trans_delay.astype(float)),   trans_delay,   "Ordered, Delayed")
-fig1.suptitle("Daily Lifecycle Transition Probabilities", fontsize=19)
-fig1.tight_layout()
+fig1, axes1 = plt.subplots(1, 3, figsize=(18, 5.9), sharey=True, layout="constrained")
+im = _plot_matrix(axes1[0], _row_norm(trans_organic.astype(float)), "Did Not Order")
+_plot_matrix(axes1[1], _row_norm(trans_ontime.astype(float)), "Ordered, On-Time")
+_plot_matrix(axes1[2], _row_norm(trans_delay.astype(float)), "Ordered, Delayed")
+fig1.supxlabel("State at end of day (t+1)", fontsize=17)
+fig1.supylabel("State at start of day (t)", fontsize=17)
+cb = fig1.colorbar(im, ax=axes1, shrink=0.75, pad=0.02)
+cb.set_label("Transition probability", fontsize=16)
+cb.ax.tick_params(labelsize=14)
+fig1.suptitle("Daily Lifecycle Transition Probabilities", fontsize=21)
 out1 = OUT_DIR / "figure1_lifecycle_transition.png"
 fig1.savefig(str(out1), dpi=150, bbox_inches="tight"); plt.close(fig1)
 print(f"Saved → {out1}")
@@ -110,32 +114,22 @@ print(f"Saved → {out1}")
 with np.errstate(invalid="ignore", divide="ignore"):
     ss_dr = np.where(matched_cum > 0, delayed_cum / matched_cum, np.nan)
 
-dr_means, dr_errs, dr_ns = [], [], []
-val_means, val_errs      = [], []
+dr_means, val_means = [], []
 for s in range(N_STATES):
     mask_dr = (lc_final == s) & ~np.isnan(ss_dr)
     dr_s  = ss_dr[mask_dr] * 100
     val_s = spend_final[lc_final == s]
     dr_means.append(dr_s.mean()  if len(dr_s)  > 0 else 0.0)
-    dr_errs.append(dr_s.std()  / np.sqrt(max(len(dr_s), 1)))
-    dr_ns.append(len(dr_s))
     val_means.append(val_s.mean() if len(val_s) > 0 else 0.0)
-    val_errs.append(val_s.std() / np.sqrt(max(len(val_s), 1)))
 
 fig2, (ax_dr, ax_val) = plt.subplots(1, 2, figsize=(14, 5))
 
-bars_dr = ax_dr.bar(STATE_NAMES, dr_means, color=STATE_COLORS, alpha=0.85, yerr=dr_errs, capsize=5)
-for bar, n_b in zip(bars_dr, dr_ns):
-    ax_dr.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(dr_errs) * 0.1 + 0.15,
-               f"n={n_b:,}", ha="center", va="bottom", fontsize=12)
+ax_dr.bar(STATE_NAMES, dr_means, color=STATE_COLORS, alpha=0.85)
 ax_dr.set_ylabel("Avg delay rate (%)", fontsize=15)
 ax_dr.set_title("Delay Rate by Lifecycle State", fontsize=17)
 ax_dr.tick_params(axis="both", labelsize=13); ax_dr.set_ylim(0, None)
 
-bars_val = ax_val.bar(STATE_NAMES, val_means, color=STATE_COLORS, alpha=0.85, yerr=val_errs, capsize=5)
-for bar, v_m in zip(bars_val, val_means):
-    ax_val.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(val_errs) * 0.1 + 0.5,
-                f"${v_m:.0f}", ha="center", va="bottom", fontsize=12)
+ax_val.bar(STATE_NAMES, val_means, color=STATE_COLORS, alpha=0.85)
 ax_val.set_ylabel("Avg lifetime value ($)", fontsize=15)
 ax_val.set_title("Lifetime Value by Lifecycle State", fontsize=17)
 ax_val.tick_params(axis="both", labelsize=13); ax_val.set_ylim(0, None)
@@ -257,13 +251,14 @@ plt.rcParams.update({
 fig4, (left, right) = plt.subplots(1, 2, figsize=(17.2, 6.4))
 fig4.subplots_adjust(left=.20, right=.975, top=.88, bottom=.27, wspace=.35)
 yy = np.arange(len(labels))
+cbps_color = "#008c95"
 left.barh(yy-.19, before, height=.30, color="#aebcc6", label="Before weighting")
-left.barh(yy+.19, after, height=.30, color="#008c95", label="After CBPS")
+left.barh(yy+.19, after, height=.30, color=cbps_color, label="After CBPS")
 margin = max(.006, .015 * before.max())
 for j, (x, y) in enumerate(zip(before, after)):
     left.text(x+margin, j-.19, f"{x:.3f}", fontsize=14, va="center")
     left.text(y+margin, j+.19, f"{y:.4f}", fontsize=14, va="center",
-              color="#008c95")
+              color=cbps_color, fontweight="bold")
 left.set_yticks(yy, labels)
 left.invert_yaxis()
 left.set_xlim(0, max(.12, float(max(before.max(), after.max()))*1.28))
@@ -276,15 +271,22 @@ left.grid(axis="x", color="#dce4e7", lw=.8)
 left.set_axisbelow(True)
 left.spines[["top", "right"]].set_visible(False)
 
+# Approximate each density from the saved bins;
+# Smooth the CDF-spline derivative to avoid kinks at coarse bin edges.
+score_grid = np.linspace(0, 1, 501)
 for arm, (color, label) in enumerate((("#335c81", "On time"), ("#bf5e35", "Delayed"))):
-    density = hist[arm] / n_arm[arm] / np.diff(bins)
-    right.stairs(density, bins, fill=True, color=color, alpha=.085)
-    right.stairs(density, bins, color=color, lw=2.3, label=label)
+    cdf_at_bins = np.r_[0., np.cumsum(hist[arm] / n_arm[arm])]
+    cdf_at_bins[-1] = 1.
+    density = np.maximum(PchipInterpolator(bins, cdf_at_bins).derivative()(score_grid), 0.)
+    density = gaussian_filter1d(density, sigma=0.012 / np.diff(score_grid)[0])
+    density /= trapezoid(density, score_grid)
+    right.fill_between(score_grid, density, color=color, alpha=.085)
+    right.plot(score_grid, density, color=color, lw=2.3, label=label)
 right.set_xlim(0, 1)
 right.set_ylim(bottom=0)
 right.set_xticks(np.arange(0, 1.01, .2))
 right.set_xlabel("Predicted delay probability")
-right.set_ylabel("Within-arm density")
+right.set_ylabel("Estimated density")
 right.set_title("Overlap Checks", pad=13)
 right.legend(frameon=False, fontsize=15)
 right.grid(axis="y", color="#dce4e7", lw=.8)
